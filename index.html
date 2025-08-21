@@ -56,7 +56,7 @@
         const { initializeApp, getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, query, where, getDocs } = window.firebase;
 
         // Custom Modal Component for confirmation and alerts
-        const Modal = ({ show, title, message, onConfirm, onCancel, confirmText = 'Confirm', cancelText = 'Cancel' }) => {
+        const Modal = ({ show, title, message, onConfirm, onCancel, confirmText = 'Confirm', cancelText = 'Cancel', children }) => {
             if (!show) return null;
 
             return (
@@ -68,7 +68,10 @@
                                 &times;
                             </button>
                         </div>
-                        <p className="text-gray-700 mb-6">{message}</p>
+                        <div className="text-gray-700 mb-6">
+                            {message && <p>{message}</p>}
+                            {children}
+                        </div>
                         <div className="flex justify-end space-x-3">
                             {onCancel && (
                                 <button
@@ -102,6 +105,8 @@
             const [budgets, setBudgets] = useState([]);
             const [isModalOpen, setIsModalOpen] = useState(false);
             const [modalContent, setModalContent] = useState({});
+            const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
+            const [newProjectName, setNewProjectName] = useState('');
 
             const [editTransaction, setEditTransaction] = useState(null);
             const [editInvoice, setEditInvoice] = useState(null);
@@ -137,7 +142,6 @@
                     if (user) {
                         setUserId(user.uid);
                     } else {
-                        // Sign in anonymously if not authenticated
                         await signInAnonymously(firebaseAuth);
                     }
                 });
@@ -147,7 +151,6 @@
                 };
             }, []);
 
-            // Function to handle database operations for projects
             const fetchProjects = useCallback(() => {
                 if (!db || !userId) return;
                 const q = collection(db, `artifacts/${window.__app_id}/users/${userId}/projects`);
@@ -161,7 +164,6 @@
                 return unsubscribe;
             }, [db, userId, currentProject]);
 
-            // Function to handle database operations for transactions
             const fetchTransactions = useCallback(() => {
                 if (!db || !userId || !currentProject) return;
                 const q = query(collection(db, `artifacts/${window.__app_id}/users/${userId}/transactions`), where("projectName", "==", currentProject));
@@ -171,7 +173,6 @@
                 return unsubscribe;
             }, [db, userId, currentProject]);
 
-            // Function to handle database operations for invoices
             const fetchInvoices = useCallback(() => {
                 if (!db || !userId || !currentProject) return;
                 const q = query(collection(db, `artifacts/${window.__app_id}/users/${userId}/invoices`), where("projectName", "==", currentProject));
@@ -181,7 +182,6 @@
                 return unsubscribe;
             }, [db, userId, currentProject]);
 
-            // Function to handle database operations for budgets
             const fetchBudgets = useCallback(() => {
                 if (!db || !userId || !currentProject) return;
                 const q = query(collection(db, `artifacts/${window.__app_id}/users/${userId}/budgets`), where("projectName", "==", currentProject));
@@ -208,12 +208,17 @@
             }, [db, userId, currentProject, fetchProjects, fetchTransactions, fetchInvoices, fetchBudgets]);
 
             // CRUD operations
+            const handleOpenAddProjectModal = () => {
+                setNewProjectName('');
+                setIsProjectModalOpen(true);
+            };
+
             const handleAddProject = async () => {
-                const projectName = prompt('Enter new project name:');
-                if (projectName && projectName.trim() !== '' && !projects.includes(projectName)) {
-                    await setDoc(doc(db, `artifacts/${window.__app_id}/users/${userId}/projects`, projectName), { name: projectName });
-                    setCurrentProject(projectName);
+                if (newProjectName && newProjectName.trim() !== '' && !projects.includes(newProjectName)) {
+                    await setDoc(doc(db, `artifacts/${window.__app_id}/users/${userId}/projects`, newProjectName), { name: newProjectName });
+                    setCurrentProject(newProjectName);
                 }
+                setIsProjectModalOpen(false);
             };
 
             const handleAddTransaction = async (data) => {
@@ -850,6 +855,23 @@
                         confirmText={modalContent.confirmText}
                         cancelText={modalContent.cancelText}
                     />
+                    <Modal
+                        show={isProjectModalOpen}
+                        title="Add New Project"
+                        onConfirm={handleAddProject}
+                        onCancel={() => setIsProjectModalOpen(false)}
+                        confirmText="Add Project"
+                        cancelText="Cancel"
+                    >
+                        <input
+                            type="text"
+                            placeholder="Enter new project name"
+                            value={newProjectName}
+                            onChange={(e) => setNewProjectName(e.target.value)}
+                            className="w-full p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                        />
+                    </Modal>
+
                     <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden">
                         <header className="bg-gray-800 p-4 sm:p-6 flex flex-col sm:flex-row justify-between items-center text-white">
                             <h1 className="text-xl sm:text-2xl font-bold">Fundzone</h1>
@@ -865,7 +887,7 @@
                                     ))}
                                 </select>
                                 <button
-                                    onClick={handleAddProject}
+                                    onClick={handleOpenAddProjectModal}
                                     className="bg-blue-600 hover:bg-blue-700 text-white text-sm sm:text-base font-medium px-4 py-1 rounded-md transition-colors duration-200"
                                 >
                                     + Add Project
