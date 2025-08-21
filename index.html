@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fundzone App</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+      import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+      import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, where, addDoc, updateDoc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+      // Global variable setup for Firebase. Do not remove or modify these lines.
+      // They are provided by the canvas environment.
+      window.__app_id = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+      window.__firebase_config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+      window.__initial_auth_token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+      window.firebase = {
+        initializeApp,
+        getAuth,
+        signInAnonymously,
+        signInWithCustomToken,
+        onAuthStateChanged,
+        getFirestore,
+        doc,
+        getDoc,
+        setDoc,
+        onSnapshot,
+        collection,
+        query,
+        where,
+        addDoc,
+        updateDoc,
+        deleteDoc,
+        getDocs,
+      };
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .tab-button.active {
+            @apply bg-white text-gray-800 shadow-md;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useMemo, useRef } = React;
+        const { initializeApp, getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, query, where, getDocs } = window.firebase;
+
+        // Custom Modal Component for confirmation and alerts
+        const Modal = ({ show, title, message, onConfirm, onCancel, confirmText = 'Confirm', cancelText = 'Cancel' }) => {
+            if (!show) return null;
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900 bg-opacity-50">
+                    <div className="bg-white rounded-lg p-6 shadow-xl w-full max-w-sm mx-4">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-xl font-semibold text-gray-900">{title}</h3>
+                            <button onClick={onCancel} className="text-gray-400 hover:text-gray-600 transition-colors duration-200">
+                                &times;
+                            </button>
+                        </div>
+                        <p className="text-gray-700 mb-6">{message}</p>
+                        <div className="flex justify-end space-x-3">
+                            {onCancel && (
+                                <button
+                                    onClick={onCancel}
+                                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300 transition-colors duration-200"
+                                >
+                                    {cancelText}
+                                </button>
+                            )}
+                            <button
+                                onClick={onConfirm}
+                                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors duration-200"
+                            >
+                                {confirmText}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [currentTab, setCurrentTab] = useState('dashboard');
+            const [currentProject, setCurrentProject] = useState('Milnerton House');
+            const [projects, setProjects] = useState([]);
+            const [transactions, setTransactions] = useState([]);
+            const [invoices, setInvoices] = useState([]);
+            const [budgets, setBudgets] = useState([]);
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [modalContent, setModalContent] = useState({});
+
+            const [editTransaction, setEditTransaction] = useState(null);
+            const [editInvoice, setEditInvoice] = useState(null);
+            const [editBudget, setEditBudget] = useState(null);
+
+            const [searchTerm, setSearchTerm] = useState('');
+            const [sortColumn, setSortColumn] = useState('date');
+            const [sortDirection, setSortDirection] = useState('desc');
+
+            const isInitialized = useRef(false);
+
+            useEffect(() => {
+                if (isInitialized.current) return;
+                isInitialized.current = true;
+
+                const appId = window.__app_id;
+                const firebaseConfig = window.__firebase_config;
+                const initialAuthToken = window.__initial_auth_token;
+
+                if (!firebaseConfig) {
+                    console.error('Firebase config is not available. Check the environment setup.');
+                    return;
+                }
+
+                const app = initializeApp(firebaseConfig);
+                const firestore = getFirestore(app);
+                const firebaseAuth = getAuth(app);
+
+                setDb(firestore);
+                setAuth(firebaseAuth);
+
+                const unsubscribeAuth = onAuthStateChanged(firebaseAuth, async (user) => {
+                    if (user) {
+                        setUserId(user.uid);
+                    } else {
+                        // Sign in anonymously if not authenticated
+                        await signInAnonymously(firebaseAuth);
+                    }
+                });
+
+                return () => {
+                    unsubscribeAuth();
+                };
+            }, []);
+
+            // Function to handle database operations for projects
+            const fetchProjects = useCallback(() => {
+                if (!db || !userId) return;
+                const q = collection(db, `artifacts/${window.__app_id}/users/${userId}/projects`);
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const projectList = snapshot.docs.map(doc => doc.data().name);
+                    setProjects(projectList.length > 0 ? projectList : ['Milnerton House']);
+                    if (!projectList.includes(currentProject)) {
+                        setCurrentProject(projectList.length > 0 ? projectList[0] : 'Milnerton House');
+                    }
+                });
+                return unsubscribe;
+            }, [db, userId, currentProject]);
+
+            // Function to handle database operations for transactions
+            const fetchTransactions = useCallback(() => {
+                if (!db || !userId || !currentProject) return;
+                const q = query(collection(db, `artifacts/${window.__app_id}/users/${userId}/transactions`), where("projectName", "==", currentProject));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    setTransactions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                });
+                return unsubscribe;
+            }, [db, userId, currentProject]);
+
+            // Function to handle database operations for invoices
+            const fetchInvoices = useCallback(() => {
+                if (!db || !userId || !currentProject) return;
+                const q = query(collection(db, `artifacts/${window.__app_id}/users/${userId}/invoices`), where("projectName", "==", currentProject));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    setInvoices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                });
+                return unsubscribe;
+            }, [db, userId, currentProject]);
+
+            // Function to handle database operations for budgets
+            const fetchBudgets = useCallback(() => {
+                if (!db || !userId || !currentProject) return;
+                const q = query(collection(db, `artifacts/${window.__app_id}/users/${userId}/budgets`), where("projectName", "==", currentProject));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    setBudgets(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                });
+                return unsubscribe;
+            }, [db, userId, currentProject]);
+
+            useEffect(() => {
+                if (db && userId) {
+                    const unsubProjects = fetchProjects();
+                    const unsubTransactions = fetchTransactions();
+                    const unsubInvoices = fetchInvoices();
+                    const unsubBudgets = fetchBudgets();
+
+                    return () => {
+                        if (unsubProjects) unsubProjects();
+                        if (unsubTransactions) unsubTransactions();
+                        if (unsubInvoices) unsubInvoices();
+                        if (unsubBudgets) unsubBudgets();
+                    };
+                }
+            }, [db, userId, currentProject, fetchProjects, fetchTransactions, fetchInvoices, fetchBudgets]);
+
+            // CRUD operations
+            const handleAddProject = async () => {
+                const projectName = prompt('Enter new project name:');
+                if (projectName && projectName.trim() !== '' && !projects.includes(projectName)) {
+                    await setDoc(doc(db, `artifacts/${window.__app_id}/users/${userId}/projects`, projectName), { name: projectName });
+                    setCurrentProject(projectName);
+                }
+            };
+
+            const handleAddTransaction = async (data) => {
+                await addDoc(collection(db, `artifacts/${window.__app_id}/users/${userId}/transactions`), { ...data, projectName: currentProject, timestamp: new Date() });
+            };
+
+            const handleUpdateTransaction = async (id, data) => {
+                const transactionRef = doc(db, `artifacts/${window.__app_id}/users/${userId}/transactions`, id);
+                await updateDoc(transactionRef, data);
+                setEditTransaction(null);
+            };
+
+            const handleDeleteTransaction = async (id) => {
+                setModalContent({
+                    title: "Confirm Deletion",
+                    message: "Are you sure you want to delete this transaction?",
+                    onConfirm: async () => {
+                        await deleteDoc(doc(db, `artifacts/${window.__app_id}/users/${userId}/transactions`, id));
+                        setIsModalOpen(false);
+                    },
+                    onCancel: () => setIsModalOpen(false),
+                });
+                setIsModalOpen(true);
+            };
+
+            const handleAddInvoice = async (data) => {
+                await addDoc(collection(db, `artifacts/${window.__app_id}/users/${userId}/invoices`), { ...data, projectName: currentProject, timestamp: new Date() });
+            };
+
+            const handleUpdateInvoice = async (id, data) => {
+                const invoiceRef = doc(db, `artifacts/${window.__app_id}/users/${userId}/invoices`, id);
+                await updateDoc(invoiceRef, data);
+                setEditInvoice(null);
+            };
+
+            const handleDeleteInvoice = async (id) => {
+                setModalContent({
+                    title: "Confirm Deletion",
+                    message: "Are you sure you want to delete this invoice?",
+                    onConfirm: async () => {
+                        await deleteDoc(doc(db, `artifacts/${window.__app_id}/users/${userId}/invoices`, id));
+                        setIsModalOpen(false);
+                    },
+                    onCancel: () => setIsModalOpen(false),
+                });
+                setIsModalOpen(true);
+            };
+
+            const handleAddBudget = async (data) => {
+                await addDoc(collection(db, `artifacts/${window.__app_id}/users/${userId}/budgets`), { ...data, projectName: currentProject, timestamp: new Date() });
+            };
+
+            const handleUpdateBudget = async (id, data) => {
+                const budgetRef = doc(db, `artifacts/${window.__app_id}/users/${userId}/budgets`, id);
+                await updateDoc(budgetRef, data);
+                setEditBudget(null);
+            };
+
+            const handleDeleteBudget = async (id) => {
+                setModalContent({
+                    title: "Confirm Deletion",
+                    message: "Are you sure you want to delete this budget item?",
+                    onConfirm: async () => {
+                        await deleteDoc(doc(db, `artifacts/${window.__app_id}/users/${userId}/budgets`, id));
+                        setIsModalOpen(false);
+                    },
+                    onCancel: () => setIsModalOpen(false),
+                });
+                setIsModalOpen(true);
+            };
+
+            // Calculate totals for dashboard
+            const totalRevenue = useMemo(() => {
+                return transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + parseFloat(t.amount), 0);
+            }, [transactions]);
+
+            const totalExpenses = useMemo(() => {
+                return transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + parseFloat(t.amount), 0);
+            }, [transactions]);
+
+            const netIncome = useMemo(() => {
+                return totalRevenue - totalExpenses;
+            }, [totalRevenue, totalExpenses]);
+
+            const outstandingInvoices = useMemo(() => {
+                return invoices.filter(inv => inv.status !== 'Paid').length;
+            }, [invoices]);
+
+            // Filter and sort transactions
+            const filteredAndSortedTransactions = useMemo(() => {
+                const filtered = transactions.filter(t =>
+                    t.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    t.category.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+                return filtered.sort((a, b) => {
+                    const aValue = a[sortColumn];
+                    const bValue = b[sortColumn];
+                    if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+                    if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+                    return 0;
+                });
+            }, [transactions, searchTerm, sortColumn, sortDirection]);
+
+            // Components for different tabs
+            const Dashboard = () => (
+                <div className="p-6">
+                    <h2 className="text-3xl font-bold mb-6 text-gray-800">Dashboard</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <div className="bg-gradient-to-r from-green-400 to-green-600 rounded-lg shadow-lg p-6 text-white transform hover:scale-105 transition-transform duration-300">
+                            <h3 className="text-lg font-semibold">Total Revenue</h3>
+                            <p className="mt-2 text-4xl font-extrabold">R{totalRevenue.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-gradient-to-r from-red-400 to-red-600 rounded-lg shadow-lg p-6 text-white transform hover:scale-105 transition-transform duration-300">
+                            <h3 className="text-lg font-semibold">Total Expenses</h3>
+                            <p className="mt-2 text-4xl font-extrabold">R{totalExpenses.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-gradient-to-r from-blue-400 to-blue-600 rounded-lg shadow-lg p-6 text-white transform hover:scale-105 transition-transform duration-300">
+                            <h3 className="text-lg font-semibold">Net Taxable Income</h3>
+                            <p className="mt-2 text-4xl font-extrabold">R{netIncome.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-gradient-to-r from-purple-400 to-purple-600 rounded-lg shadow-lg p-6 text-white transform hover:scale-105 transition-transform duration-300">
+                            <h3 className="text-lg font-semibold">Outstanding Invoices</h3>
+                            <p className="mt-2 text-4xl font-extrabold">{outstandingInvoices}</p>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const TransactionForm = ({ onSubmit, initialData = {} }) => {
+                const [formState, setFormState] = useState({
+                    amount: initialData.amount || '',
+                    type: initialData.type || 'expense',
+                    description: initialData.description || '',
+                    category: initialData.category || '',
+                    date: initialData.date || new Date().toISOString().slice(0, 10),
+                });
+            
+                const handleChange = (e) => {
+                    const { name, value } = e.target;
+                    setFormState(prev => ({ ...prev, [name]: value }));
+                };
+            
+                const handleSubmit = (e) => {
+                    e.preventDefault();
+                    if (!formState.amount || !formState.description || !formState.category) {
+                        setModalContent({
+                            title: "Validation Error",
+                            message: "Please fill out all fields before submitting.",
+                            onConfirm: () => setIsModalOpen(false),
+                            onCancel: null,
+                            confirmText: "Okay"
+                        });
+                        setIsModalOpen(true);
+                        return;
+                    }
+                    onSubmit(formState);
+                    setFormState({ amount: '', type: 'expense', description: '', category: '', date: new Date().toISOString().slice(0, 10) });
+                };
+            
+                return (
+                    <form onSubmit={handleSubmit} className="bg-gray-100 p-6 rounded-lg shadow-inner">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <input
+                                type="number"
+                                name="amount"
+                                placeholder="Amount (R)"
+                                value={formState.amount}
+                                onChange={handleChange}
+                                className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                            />
+                            <select
+                                name="type"
+                                value={formState.type}
+                                onChange={handleChange}
+                                className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                            >
+                                <option value="expense">Expense</option>
+                                <option value="income">Income</option>
+                            </select>
+                            <input
+                                type="text"
+                                name="description"
+                                placeholder="Description"
+                                value={formState.description}
+                                onChange={handleChange}
+                                className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                            />
+                            <input
+                                type="text"
+                                name="category"
+                                placeholder="Category"
+                                value={formState.category}
+                                onChange={handleChange}
+                                className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                            />
+                            <input
+                                type="date"
+                                name="date"
+                                value={formState.date}
+                                onChange={handleChange}
+                                className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            className="mt-4 w-full bg-blue-600 text-white font-bold py-3 rounded-md hover:bg-blue-700 transition-colors duration-200 shadow-md"
+                        >
+                            {initialData.id ? 'Update Transaction' : 'Add Transaction'}
+                        </button>
+                        {initialData.id && (
+                            <button
+                                type="button"
+                                onClick={() => setEditTransaction(null)}
+                                className="mt-2 w-full bg-gray-400 text-white font-bold py-3 rounded-md hover:bg-gray-500 transition-colors duration-200 shadow-md"
+                            >
+                                Cancel
+                            </button>
+                        )}
+                    </form>
+                );
+            };
+
+            const TransactionLedger = () => {
+                const toggleSortDirection = (column) => {
+                    if (sortColumn === column) {
+                        setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+                    } else {
+                        setSortColumn(column);
+                        setSortDirection('asc');
+                    }
+                };
+
+                const getSortIcon = (column) => {
+                    if (sortColumn !== column) return '⇅';
+                    return sortDirection === 'asc' ? '▲' : '▼';
+                };
+
+                return (
+                    <div className="p-6">
+                        <h2 className="text-3xl font-bold mb-6 text-gray-800">Transaction Ledger</h2>
+                        <div className="mb-6">
+                            <input
+                                type="text"
+                                placeholder="Search transactions..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="w-full p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                            />
+                        </div>
+                        {editTransaction ? (
+                            <div className="mb-6">
+                                <h3 className="text-2xl font-semibold mb-4 text-gray-800">Edit Transaction</h3>
+                                <TransactionForm onSubmit={(data) => handleUpdateTransaction(editTransaction.id, data)} initialData={editTransaction} />
+                            </div>
+                        ) : (
+                            <div className="mb-6">
+                                <h3 className="text-2xl font-semibold mb-4 text-gray-800">Add New Transaction</h3>
+                                <TransactionForm onSubmit={handleAddTransaction} />
+                            </div>
+                        )}
+                        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        {['Date', 'Description', 'Category', 'Amount (R)', 'Type'].map((header, index) => (
+                                            <th
+                                                key={index}
+                                                className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
+                                                onClick={() => toggleSortDirection(header.toLowerCase().split(' ')[0])}
+                                            >
+                                                {header} {getSortIcon(header.toLowerCase().split(' ')[0])}
+                                            </th>
+                                        ))}
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {filteredAndSortedTransactions.length > 0 ? (
+                                        filteredAndSortedTransactions.map(t => (
+                                            <tr key={t.id} className="hover:bg-gray-50 transition-colors duration-200">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.date}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.description}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{t.category}</td>
+                                                <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${t.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
+                                                    R{parseFloat(t.amount).toFixed(2)}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">{t.type}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                    <button
+                                                        onClick={() => setEditTransaction(t)}
+                                                        className="text-blue-600 hover:text-blue-900 transition-colors duration-200 mr-2"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleDeleteTransaction(t.id)}
+                                                        className="text-red-600 hover:text-red-900 transition-colors duration-200"
+                                                    >
+                                                        Delete
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan="6" className="px-6 py-4 text-center text-gray-500">No transactions found.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            };
+
+            const Invoices = () => {
+                const handleUpdateStatus = async (invoiceId, status) => {
+                    const invoiceRef = doc(db, `artifacts/${window.__app_id}/users/${userId}/invoices`, invoiceId);
+                    await updateDoc(invoiceRef, { status });
+                };
+
+                const InvoiceForm = ({ onSubmit, initialData = {} }) => {
+                    const [formState, setFormState] = useState({
+                        clientName: initialData.clientName || '',
+                        amount: initialData.amount || '',
+                        status: initialData.status || 'Outstanding',
+                        dueDate: initialData.dueDate || '',
+                        description: initialData.description || '',
+                    });
+                
+                    const handleChange = (e) => {
+                        const { name, value } = e.target;
+                        setFormState(prev => ({ ...prev, [name]: value }));
+                    };
+                
+                    const handleSubmit = (e) => {
+                        e.preventDefault();
+                        if (!formState.clientName || !formState.amount || !formState.dueDate) {
+                            setModalContent({
+                                title: "Validation Error",
+                                message: "Please fill out all fields before submitting.",
+                                onConfirm: () => setIsModalOpen(false),
+                                onCancel: null,
+                                confirmText: "Okay"
+                            });
+                            setIsModalOpen(true);
+                            return;
+                        }
+                        onSubmit(formState);
+                        setFormState({ clientName: '', amount: '', status: 'Outstanding', dueDate: '', description: '' });
+                    };
+                
+                    return (
+                        <form onSubmit={handleSubmit} className="bg-gray-100 p-6 rounded-lg shadow-inner mb-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <input
+                                    type="text"
+                                    name="clientName"
+                                    placeholder="Client Name"
+                                    value={formState.clientName}
+                                    onChange={handleChange}
+                                    className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                                />
+                                <input
+                                    type="number"
+                                    name="amount"
+                                    placeholder="Amount (R)"
+                                    value={formState.amount}
+                                    onChange={handleChange}
+                                    className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                                />
+                                <input
+                                    type="date"
+                                    name="dueDate"
+                                    value={formState.dueDate}
+                                    onChange={handleChange}
+                                    className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                                />
+                                <select
+                                    name="status"
+                                    value={formState.status}
+                                    onChange={handleChange}
+                                    className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                                >
+                                    <option value="Outstanding">Outstanding</option>
+                                    <option value="Paid">Paid</option>
+                                </select>
+                                <textarea
+                                    name="description"
+                                    placeholder="Description"
+                                    value={formState.description}
+                                    onChange={handleChange}
+                                    className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200 col-span-1 md:col-span-2"
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                className="mt-4 w-full bg-blue-600 text-white font-bold py-3 rounded-md hover:bg-blue-700 transition-colors duration-200 shadow-md"
+                            >
+                                {initialData.id ? 'Update Invoice' : 'Add Invoice'}
+                            </button>
+                            {initialData.id && (
+                                <button
+                                    type="button"
+                                    onClick={() => setEditInvoice(null)}
+                                    className="mt-2 w-full bg-gray-400 text-white font-bold py-3 rounded-md hover:bg-gray-500 transition-colors duration-200 shadow-md"
+                                >
+                                    Cancel
+                                </button>
+                            )}
+                        </form>
+                    );
+                };
+
+                return (
+                    <div className="p-6">
+                        <h2 className="text-3xl font-bold mb-6 text-gray-800">Invoices</h2>
+                        {editInvoice ? (
+                            <InvoiceForm onSubmit={(data) => handleUpdateInvoice(editInvoice.id, data)} initialData={editInvoice} />
+                        ) : (
+                            <InvoiceForm onSubmit={handleAddInvoice} />
+                        )}
+                        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        {['Client', 'Amount (R)', 'Due Date', 'Status', 'Description'].map((header, index) => (
+                                            <th key={index} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{header}</th>
+                                        ))}
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {invoices.length > 0 ? (
+                                        invoices.map(inv => (
+                                            <tr key={inv.id} className="hover:bg-gray-50 transition-colors duration-200">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{inv.clientName}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">R{parseFloat(inv.amount).toFixed(2)}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{inv.dueDate}</td>
+                                                <td className={`px-6 py-4 whitespace-nowrap text-sm font-medium ${inv.status === 'Paid' ? 'text-green-600' : 'text-red-600'}`}>{inv.status}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{inv.description}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                    <button onClick={() => setEditInvoice(inv)} className="text-blue-600 hover:text-blue-900 transition-colors duration-200 mr-2">Edit</button>
+                                                    <button onClick={() => handleDeleteInvoice(inv.id)} className="text-red-600 hover:text-red-900 transition-colors duration-200">Delete</button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan="6" className="px-6 py-4 text-center text-gray-500">No invoices found.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            };
+
+            const Reports = () => {
+                const totalBudget = budgets.reduce((sum, b) => sum + parseFloat(b.amount), 0);
+                const remainingBudget = totalBudget - totalExpenses;
+                const profitLossStatus = netIncome >= 0 ? 'Profit' : 'Loss';
+
+                const BudgetForm = ({ onSubmit, initialData = {} }) => {
+                    const [formState, setFormState] = useState({
+                        category: initialData.category || '',
+                        amount: initialData.amount || '',
+                    });
+                
+                    const handleChange = (e) => {
+                        const { name, value } = e.target;
+                        setFormState(prev => ({ ...prev, [name]: value }));
+                    };
+                
+                    const handleSubmit = (e) => {
+                        e.preventDefault();
+                        if (!formState.category || !formState.amount) {
+                            setModalContent({
+                                title: "Validation Error",
+                                message: "Please fill out all fields before submitting.",
+                                onConfirm: () => setIsModalOpen(false),
+                                onCancel: null,
+                                confirmText: "Okay"
+                            });
+                            setIsModalOpen(true);
+                            return;
+                        }
+                        onSubmit(formState);
+                        setFormState({ category: '', amount: '' });
+                    };
+                
+                    return (
+                        <form onSubmit={handleSubmit} className="bg-gray-100 p-6 rounded-lg shadow-inner mb-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <input
+                                    type="text"
+                                    name="category"
+                                    placeholder="Budget Category"
+                                    value={formState.category}
+                                    onChange={handleChange}
+                                    className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                                />
+                                <input
+                                    type="number"
+                                    name="amount"
+                                    placeholder="Budget Amount (R)"
+                                    value={formState.amount}
+                                    onChange={handleChange}
+                                    className="p-3 rounded-md border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+                                />
+                            </div>
+                            <button
+                                type="submit"
+                                className="mt-4 w-full bg-blue-600 text-white font-bold py-3 rounded-md hover:bg-blue-700 transition-colors duration-200 shadow-md"
+                            >
+                                {initialData.id ? 'Update Budget' : 'Add Budget'}
+                            </button>
+                            {initialData.id && (
+                                <button
+                                    type="button"
+                                    onClick={() => setEditBudget(null)}
+                                    className="mt-2 w-full bg-gray-400 text-white font-bold py-3 rounded-md hover:bg-gray-500 transition-colors duration-200 shadow-md"
+                                >
+                                    Cancel
+                                </button>
+                            )}
+                        </form>
+                    );
+                };
+
+                return (
+                    <div className="p-6">
+                        <h2 className="text-3xl font-bold mb-6 text-gray-800">Financial Reports & Budgeting</h2>
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white rounded-lg shadow-md p-6">
+                                <h3 className="text-xl font-semibold mb-4">Profit & Loss Statement</h3>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between items-center text-gray-700">
+                                        <span>Total Revenue:</span>
+                                        <span className="font-semibold text-green-600">R{totalRevenue.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-gray-700">
+                                        <span>Total Expenses:</span>
+                                        <span className="font-semibold text-red-600">R{totalExpenses.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center font-bold text-lg border-t pt-2">
+                                        <span>Net Income:</span>
+                                        <span className={netIncome >= 0 ? 'text-green-600' : 'text-red-600'}>R{netIncome.toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="bg-white rounded-lg shadow-md p-6">
+                                <h3 className="text-xl font-semibold mb-4">Budget Tracker</h3>
+                                <div className="space-y-2">
+                                    <div className="flex justify-between items-center text-gray-700">
+                                        <span>Total Budget:</span>
+                                        <span className="font-semibold text-gray-900">R{totalBudget.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center text-gray-700">
+                                        <span>Total Expenses:</span>
+                                        <span className="font-semibold text-red-600">R{totalExpenses.toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex justify-between items-center font-bold text-lg border-t pt-2">
+                                        <span>Remaining Budget:</span>
+                                        <span className={remainingBudget >= 0 ? 'text-green-600' : 'text-red-600'}>R{remainingBudget.toFixed(2)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <h3 className="text-2xl font-semibold mt-8 mb-4">Manage Budgets</h3>
+                        {editBudget ? (
+                            <BudgetForm onSubmit={(data) => handleUpdateBudget(editBudget.id, data)} initialData={editBudget} />
+                        ) : (
+                            <BudgetForm onSubmit={handleAddBudget} />
+                        )}
+                        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Category</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Budgeted Amount (R)</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {budgets.length > 0 ? (
+                                        budgets.map(b => (
+                                            <tr key={b.id} className="hover:bg-gray-50 transition-colors duration-200">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{b.category}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">R{parseFloat(b.amount).toFixed(2)}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                                    <button onClick={() => setEditBudget(b)} className="text-blue-600 hover:text-blue-900 transition-colors duration-200 mr-2">Edit</button>
+                                                    <button onClick={() => handleDeleteBudget(b.id)} className="text-red-600 hover:text-red-900 transition-colors duration-200">Delete</button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan="3" className="px-6 py-4 text-center text-gray-500">No budgets set.</td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            };
+
+            const renderContent = () => {
+                switch (currentTab) {
+                    case 'dashboard':
+                        return <Dashboard />;
+                    case 'transactions':
+                        return <TransactionLedger />;
+                    case 'invoices':
+                        return <Invoices />;
+                    case 'reports':
+                        return <Reports />;
+                    default:
+                        return <Dashboard />;
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100 p-4 sm:p-6 lg:p-8">
+                    <Modal
+                        show={isModalOpen}
+                        title={modalContent.title}
+                        message={modalContent.message}
+                        onConfirm={modalContent.onConfirm}
+                        onCancel={modalContent.onCancel}
+                        confirmText={modalContent.confirmText}
+                        cancelText={modalContent.cancelText}
+                    />
+                    <div className="max-w-7xl mx-auto bg-white rounded-xl shadow-2xl overflow-hidden">
+                        <header className="bg-gray-800 p-4 sm:p-6 flex flex-col sm:flex-row justify-between items-center text-white">
+                            <h1 className="text-xl sm:text-2xl font-bold">Fundzone</h1>
+                            <div className="flex items-center space-x-2 mt-2 sm:mt-0">
+                                <span className="text-sm sm:text-base">Current Project:</span>
+                                <select
+                                    value={currentProject}
+                                    onChange={(e) => setCurrentProject(e.target.value)}
+                                    className="bg-gray-700 text-white rounded-md px-3 py-1 text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                    {projects.map(p => (
+                                        <option key={p} value={p}>{p}</option>
+                                    ))}
+                                </select>
+                                <button
+                                    onClick={handleAddProject}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white text-sm sm:text-base font-medium px-4 py-1 rounded-md transition-colors duration-200"
+                                >
+                                    + Add Project
+                                </button>
+                            </div>
+                        </header>
+                        <nav className="bg-gray-200 p-2 sm:p-4 flex flex-wrap justify-center sm:justify-start space-x-1 sm:space-x-2">
+                            <button
+                                onClick={() => setCurrentTab('dashboard')}
+                                className={`tab-button px-3 py-2 rounded-lg font-medium text-sm sm:text-base transition-colors duration-200 ${currentTab === 'dashboard' ? 'active' : 'text-gray-600 hover:bg-gray-300'}`}
+                            >
+                                Dashboard
+                            </button>
+                            <button
+                                onClick={() => setCurrentTab('transactions')}
+                                className={`tab-button px-3 py-2 rounded-lg font-medium text-sm sm:text-base transition-colors duration-200 ${currentTab === 'transactions' ? 'active' : 'text-gray-600 hover:bg-gray-300'}`}
+                            >
+                                Transaction Ledger
+                            </button>
+                            <button
+                                onClick={() => setCurrentTab('invoices')}
+                                className={`tab-button px-3 py-2 rounded-lg font-medium text-sm sm:text-base transition-colors duration-200 ${currentTab === 'invoices' ? 'active' : 'text-gray-600 hover:bg-gray-300'}`}
+                            >
+                                Invoices
+                            </button>
+                            <button
+                                onClick={() => setCurrentTab('reports')}
+                                className={`tab-button px-3 py-2 rounded-lg font-medium text-sm sm:text-base transition-colors duration-200 ${currentTab === 'reports' ? 'active' : 'text-gray-600 hover:bg-gray-300'}`}
+                            >
+                                Reports & Budgeting
+                            </button>
+                        </nav>
+                        <main className="p-4 sm:p-6 bg-gray-50">
+                            {renderContent()}
+                        </main>
+                        <footer className="bg-gray-800 p-4 sm:p-6 text-white text-center text-xs sm:text-sm">
+                            <p className="mb-2">User ID: {userId}</p>
+                            <p>&copy; 2024 Fundzone. All rights reserved.</p>
+                        </footer>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
